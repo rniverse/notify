@@ -25,7 +25,12 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
+.env
+.env.test
 .env.local
+
+# regenerated via `db:main generate` — not committed, same as aham
+src/db/migrations
 .env.development.local
 .env.test.local
 .env.production.local
@@ -40,3 +45,8 @@ yarn-error.log*
 **/*.log
 package-lock.json
 **/*.bun
+
+certs/
+
+# graphify (generated, transient — regenerate via /Users/sage/git/rniverse/CLAUDE.md)
+graphify-out/
