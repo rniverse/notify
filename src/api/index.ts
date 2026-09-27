@@ -1,5 +1,8 @@
 import Elysia from 'elysia';
+import { healthAPI } from './health.api';
 import { notificationAPI } from './notification.api';
 
-// No `/api` prefix, no CORS, no auth guards — internal-only (spec §14).
-export const createAPI = () => new Elysia().use(notificationAPI);
+// Everything under `/api`. No CORS, no auth guards —
+// internal-only (spec §14).
+export const createAPI = () =>
+	new Elysia({ prefix: '/api' }).use(healthAPI).use(notificationAPI);

@@ -124,16 +124,19 @@ export const config = Object.freeze({
 		get producers() {
 			return {
 				notifier: {
-					name: env.get('KAFKA_NOTIFIER_NAME', 'notifier'),
-					topic: env.required('KAFKA_NOTIFIER_TOPIC_NAME'),
+					name: env.get('KAFKA_NOTIFICATIONS_PRODUCER_NAME', 'notifier'),
+					topic: env.required('KAFKA_NOTIFICATIONS_TOPIC_NAME'),
 				},
 			};
 		},
 		get consumers() {
 			return {
 				notifications: {
-					name: env.get('KAFKA_NOTIFICATIONS_NAME', 'notifications'),
-					groupId: env.get('KAFKA_NOTIFICATIONS_GROUP_ID', 'notify-consumer'),
+					name: env.get('KAFKA_NOTIFICATIONS_CONSUMER_NAME', 'notifications'),
+					groupId: env.get(
+						'KAFKA_NOTIFICATIONS_CONSUMER_GROUP_ID',
+						'notify-consumer',
+					),
 					topic: env.required('KAFKA_NOTIFICATIONS_TOPIC_NAME'),
 				},
 			};
