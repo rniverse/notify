@@ -1,5 +1,5 @@
 import { config } from '@config';
-import { pg, producers } from '@connections';
+import { kafka, pg } from '@connections';
 import { notifications } from '@db/schema';
 import { log } from '@rniverse/utils';
 import type { NotificationChannel } from '@schema/types';
@@ -16,9 +16,9 @@ export async function submit(input: {
 }): Promise<{ published: boolean }> {
 	const { id, channel, payload } = input;
 	const PRODUCER = config.kafka.producers.notifier;
-	// Not `ready` while Kafka is down or still recovering (connections/setup/kafka.setup.ts) —
-	// don't wait on it, fall back to the pending row.
-	const producer = producers.notifier;
+	// Not `ready` while Kafka is down or still recovering — it follows the
+	// connector's state — so don't wait on it, fall back to the pending row.
+	const producer = kafka.producers.get(PRODUCER.name);
 
 	if (producer.state !== 'ready') {
 		log.warn(

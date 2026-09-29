@@ -26,9 +26,9 @@ services that know about it. No auth/guards for v1 — see §14, §16.
   (`PostgresConnector`) — same as `aham`.
 - **Queue:** Kafka via `@rniverse/connectors/kafka` (`KafkaConnector`, built
   on `kafkajs`; runs against real Kafka or Redpanda — in use here against an
-  Aiven-hosted Kafka cluster). The producer and consumer are the connector's
-  links (`kafka.producer()` / `kafka.consumer()`), owned and run by notify
-  itself (§8) — not by `@rniverse/shared`'s registry any more.
+  Aiven-hosted Kafka cluster). The producer and consumer are declared in
+  the connector's config and connected by it; notify only subscribes / runs
+  the consumer (§8).
 - **Email provider:** `resend`, wrapped behind an internal interface (not
   called directly from service code) so a second provider or a swap later
   touches one file. **Confirmed the only service that still talks to
@@ -106,25 +106,23 @@ over from `aham`.
 ```
 src/
   index.ts                    — app bootstrap via @rniverse/shared/bootstrap
-                                 (createApp/listen/boot), starts the Kafka
-                                 setup (setup$kafka) with the consumer handlers
+                                 (createApp/listen/boot); attaches the consumer
+                                 listeners before connections().init()
   config.ts                   — the ONLY file that reads process.env;
                                  owns the declarative kafka.producers/consumers
   connections/
     index.ts                  — @rniverse/shared/registry's createRegistry
-                                 (postgres required, kafka optional + never
-                                 connected by it); exports connections(),
-                                 kafka/producers/consumers, pg()/mail()
+                                 (postgres required, kafka optional — connected
+                                 in the background); exports connections(),
+                                 kafka, pg()/mail()
     postgres.connection.ts    — PostgresConnector instance
-    kafka.connection.ts       — KafkaConnector + its producer / consumer links
-    setup/kafka.setup.ts      — setup$kafka: connects Kafka in the background,
-                                 recovers the connector, producer and consumers
-                                 on an interval; runs each consumer (§8)
+    kafka.connection.ts       — KafkaConnector with its producer / consumer
+                                 declared in config, recover timer (§8)
     email.connection.ts       — Resend client instance (notify only, §2)
   consumers/                  — one file per named Kafka consumer
     notifications.consumer.ts — exports onEachMessage (poison-message guard + dispatch)
-    index.ts                  — { subscribers } — the handler per configured
-                                 consumer, handed to setup$kafka.start();
+    index.ts                  — { subscribers, attach } — attach() adds each
+                                 consumer's `connect` listener: subscribe + run;
                                  kept separate from connections/ specifically so
                                  connections/index.ts never has to import a
                                  domain-specific message handler (would be circular
@@ -314,32 +312,39 @@ report about the pipeline's own failures shouldn't loop back through it.
    - **Commit the Kafka offset after handling, unconditionally** — this is
      the mechanism from §3, not optional.
 
-**Kafka never blocks boot or sync/status.** The registry lists Kafka as
-`required: false` with a no-op `connect` (it only reports health and closes
-it), so a slow or unreachable broker can't hold up `connections().init()`.
-`connections/setup/kafka.setup.ts` (`setup$kafka`) starts after init and, every
-`KAFKA_RECOVER_EVERY` (default `30s`, plus once immediately), runs one pass:
-`kafka.health()` (which reconnects the connector when down, time-limited,
-with the connectors' circuit breaker), then connects any producer that isn't
-`ready` and starts any consumer that is `idle`/`failed`/`closed`. A consumer
-start is connect → subscribe → run — a reconnected kafkajs consumer has no
-subscription, so this is the owner's job, not the connector's. A start that
-fails midway closes the consumer so the next pass opens a fresh one. Passes
-never overlap. Shutdown stops `setup$kafka` before closing connections, or
-a pass could reopen them.
+**Kafka never blocks boot or sync/status.** The registry lists the
+`KafkaConnector` as `required: false`, and the registry connects an optional
+connection in the background — a slow or unreachable broker never holds up
+`connections().init()`, which also runs no health check.
+
+**Recovery is the drivers' and the connector's, not notify's.** The producer
+and consumer are declared in the `KafkaConnector`'s config
+(`connections/kafka.connection.ts`); the connector connects them once it's
+ready. `recover: { every }` (from `KAFKA_RECOVER_EVERY`, default `30s`)
+re-checks the connector on a timer — connecting while it has none, else a
+health check — so a broker that was down at boot or dropped mid-run is
+noticed back without anything calling `/api/health`. kafkajs reconnects and
+restarts a crashed consumer with its subscription; an open circuit tears
+nothing down. The only thing notify adds is `consumers.attach()`: a
+`connect` listener per consumer that subscribes (retrying a few times — a
+topic can be briefly unknown to a broker that just started) and runs it,
+once per new kafkajs consumer.
 
 Step 1's publish uses the producer only when its state is `ready`; any other
-state goes straight to the pending row, never waits on Kafka. `/api/health`
-reports Kafka through the same link (`kafka: not connected yet` until the
-first pass; a `CircuitOpenError` while the breaker is open answers
-instantly).
+state goes straight to the pending row, never waits on Kafka. The producer's
+state follows the connector's down and back (kafkajs sends no producer event
+on broker loss), so during an outage publish falls back immediately.
+`/api/health` reports Kafka through the connector (a `CircuitOpenError` while
+the breaker is open answers instantly).
 
-Smoke-tested against local Docker (connectors' compose): broker down at
-boot — server up immediately, `/api/health` answers, async send falls back
-to a pending row; broker started later — connector, producer and consumer
-recover without a restart and a published message is consumed; broker
-restarted mid-run — consumer crashes, `setup$kafka` restarts it, group rejoins,
-message consumed; SIGINT — clean shutdown.
+Smoke-tested against local Docker (connectors' compose): broker unreachable at
+boot — server up 3 ms after Postgres, async send falls back to a pending row;
+broker down at boot then started — connector, producer and consumer connect
+on their own, a published message is consumed; broker restarted mid-run —
+kafkajs rides it out, message consumed; long outage mid-run — producer
+`failed` within seconds, async send falls back in 40 ms, broker back →
+everything `recovered` (the consumer through kafkajs's own restart, no
+re-subscribe) and the next message is consumed; SIGINT — clean shutdown.
 
 **Poison-message guard, before any of the above:** a message that isn't
 valid JSON, or is valid JSON that doesn't match the notification shape
@@ -468,14 +473,14 @@ Env vars needed, mirroring `aham`'s "one file (`config.ts`) reads
   against the real Aiven-hosted broker (connect, topic metadata, produce,
   consume all confirmed working). `KAFKA_BOOTSTRAP_SERVERS` goes through as
   `brokers` unparsed — `KafkaConnector` splits the comma-separated string.
-  `KAFKA_RECOVER_EVERY` (duration string, default `30s`) — `setup$kafka`'s
-  interval (§8).
+  `KAFKA_RECOVER_EVERY` (duration string, default `30s`) — the connector's
+  `recover.every` (§8).
 - **Producers/consumers are declared in `config.ts`, not hand-rolled in
   `connections/`** — `config.kafka.producers`/`config.kafka.consumers` are
   the single source of truth; `connections/kafka.connection.ts` creates one
-  link per entry on the `KafkaConnector` (`kafka.producer({ name })`,
-  `kafka.consumer({ name, groupId })`) and `setup/kafka.setup.ts` connects/runs them
-  (§8):
+  link per entry in the `KafkaConnector`'s config (`producers: [{ name }]`,
+  `consumers: [{ name, groupId }]`); the connector connects them and
+  `consumers.attach()` subscribes / runs each consumer (§8):
   ```ts
   // config.ts
   kafka: {
@@ -607,7 +612,7 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
 - `connections/{postgres,email,kafka,index}.ts` — `index.ts` rebuilt on
   `@rniverse/shared/registry`'s `createRegistry`; `kafka` stays
   `required: false` in health (sync/status keep working if Kafka is down)
-  and is connected by `setup$kafka`, not the registry (§8).
+  and connected in the background by the registry (§8).
 - `services/email.service.ts` — unchanged, still the only direct Resend
   call in this codebase.
 - `services/notification/{dispatch,orchestrator,publish,index}.ts` — split
@@ -619,8 +624,8 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
   poison-message-safe handler (`GROUP_JOIN` logged so "hadn't joined yet"
   is visible instead of guessed, `reject()` records a malformed message
   into `failed_notifications`/`failures` instead of crash-looping the
-  consumer) plus the barrel mapping each configured consumer to its handler
-  (`setup$kafka` runs them, §8).
+  consumer) plus the barrel whose `attach()` subscribes + runs each consumer
+  on its `connect` (§8).
 - `schema/types.ts` — moved out of `services/notification/` (§4).
 - `schema/api/notification.schema.ts` — unchanged, includes the Kafka
   wire-format schema used by the poison-message guard.
@@ -641,7 +646,7 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
   the `connection-status.enum.ts` state machine, the
   `registerShutdown`/`listen` boot boilerplate. (The standalone Kafka
   producer/consumer factories went into `createRegistry` first, then out
-  again: they're `KafkaConnector` links now, run by `setup$kafka`, §8.)
+  again: they're declared in the `KafkaConnector`'s config now, §8.)
 
 **Not built yet:** the retry and metrics crons (§11, §12) — still next, not
 blocked on anything (they don't need Kafka at all, per §7/§11/§12).
