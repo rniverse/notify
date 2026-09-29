@@ -1,5 +1,5 @@
 import { config } from '@config';
-import { kafka, pg } from '@connections';
+import { pg, producers } from '@connections';
 import { notifications } from '@db/schema';
 import { log } from '@rniverse/utils';
 import type { NotificationChannel } from '@schema/types';
@@ -16,12 +16,11 @@ export async function submit(input: {
 }): Promise<{ published: boolean }> {
 	const { id, channel, payload } = input;
 	const PRODUCER = config.kafka.producers.notifier;
-	// kafka config is always passed in connections/index.ts, so this is
-	// never undefined; the producer itself can still be null (never
-	// connected — see registerProducer's best-effort catch).
-	const client = kafka()?.producers.get(PRODUCER.name) ?? null;
+	// Not `ready` while Kafka is down or still recovering (connections/setup/kafka.setup.ts) —
+	// don't wait on it, fall back to the pending row.
+	const producer = producers.notifier;
 
-	if (!client) {
+	if (producer.state !== 'ready') {
 		log.warn(
 			{ id },
 			'Kafka producer not available — falling back to pending row',
@@ -32,7 +31,7 @@ export async function submit(input: {
 
 	const startedAt = Date.now();
 	try {
-		await client.send({
+		await producer.getInstance().send({
 			topic: PRODUCER.topic,
 			messages: [{ value: JSON.stringify({ id, channel, payload }) }], // unkeyed — spec §10
 		});

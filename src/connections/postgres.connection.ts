@@ -1,4 +1,8 @@
 import { config } from '@config';
-import { SQLConnector } from '@rniverse/connectors/sql';
+import { PostgresConnector } from '@rniverse/connectors/postgres';
 
-export const postgres = new SQLConnector({ url: config.database.url });
+export const postgres = new PostgresConnector({
+	name: 'postgres',
+	appName: config.appName,
+	url: config.database.url,
+});

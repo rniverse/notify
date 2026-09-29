@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type {
-	RedpandaSASLConfig,
-	RedpandaTLSConfig,
-} from '@rniverse/connectors/redpanda';
+	KafkaSASLConfig,
+	KafkaTLSConfig,
+} from '@rniverse/connectors/kafka';
 import { boundedParseInt, environment as env } from '@rniverse/utils';
 import { duration } from '@rniverse/utils/duration';
 
@@ -27,6 +27,12 @@ function kafkaProtocol(): KafkaProtocol {
 export const config = Object.freeze({
 	get environment() {
 		return env.get('NODE_ENV', 'development');
+	},
+
+	// Every connection's client name (Postgres `application_name`, kafkajs
+	// `clientId`) — required, the connectors have no default.
+	get appName() {
+		return env.required('INSTANCE_NAME');
 	},
 
 	server: {
@@ -86,21 +92,29 @@ export const config = Object.freeze({
 		},
 	},
 
-	// Translates KAFKA_* env vars into RedpandaConnectorConfig shape, not a
+	// Translates KAFKA_* env vars into KafkaConnector's config shape, not a
 	// 1:1 pass-through (spec.md §15): protocol splits into ssl/sasl, mechanism
 	// lowercased, CA cert read from disk rather than forwarded as a path.
 	kafka: {
-		get url() {
+		// Comma-separated; KafkaConnector splits it.
+		get brokers() {
 			return env.required('KAFKA_BOOTSTRAP_SERVERS');
 		},
-		get ssl(): RedpandaTLSConfig | undefined {
+		// How often a missing Kafka connection, producer or consumer is retried
+		// (spec §8) — Kafka never blocks boot, this is how it comes back.
+		get recoverEvery() {
+			const raw = env.get('KAFKA_RECOVER_EVERY', '30s');
+			duration.toMs(raw); // throws on a malformed value
+			return raw;
+		},
+		get ssl(): KafkaTLSConfig | undefined {
 			const protocol = kafkaProtocol();
 			if (protocol !== 'SSL' && protocol !== 'SASL_SSL') return undefined;
 			const caPath = env.get('KAFKA_CA_CERTIFICATE');
 			if (!caPath) return true;
 			return { ca: [readFileSync(caPath, 'utf-8')] };
 		},
-		get sasl(): RedpandaSASLConfig | undefined {
+		get sasl(): KafkaSASLConfig | undefined {
 			const protocol = kafkaProtocol();
 			if (protocol !== 'SASL_PLAINTEXT' && protocol !== 'SASL_SSL')
 				return undefined;
@@ -119,8 +133,8 @@ export const config = Object.freeze({
 			};
 		},
 		// Keyed by a stable TS property (`producers.notifier`) so callers get
-		// a typo-checked reference; `name` inside is the actual runtime/registry
-		// key, env-driven so it can change per deployment without a code change.
+		// a typo-checked reference; `name` inside is the link's name on the
+		// KafkaConnector, env-driven so it can change per deployment without a code change.
 		get producers() {
 			return {
 				notifier: {

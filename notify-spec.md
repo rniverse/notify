@@ -22,12 +22,13 @@ services that know about it. No auth/guards for v1 — see §14, §16.
 - **Runtime:** Bun for local dev; code stays Node-compatible (global rule —
   no `Bun.*`-only APIs without a portable fallback).
 - **Framework:** Elysia, same as `aham`.
-- **Database:** PostgreSQL, via Drizzle ORM + `@rniverse/connectors/sql`
-  (`SQLConnector`) — same as `aham`.
-- **Queue:** Kafka wire protocol via `@rniverse/connectors/redpanda`
-  (`RedpandaConnector`, built on `kafkajs`) — confirmed protocol-generic,
-  not Redpanda-specific, so it runs against real Kafka brokers unchanged
-  (in use here against an Aiven-hosted Kafka cluster, not Redpanda itself).
+- **Database:** PostgreSQL, via Drizzle ORM + `@rniverse/connectors/postgres`
+  (`PostgresConnector`) — same as `aham`.
+- **Queue:** Kafka via `@rniverse/connectors/kafka` (`KafkaConnector`, built
+  on `kafkajs`; runs against real Kafka or Redpanda — in use here against an
+  Aiven-hosted Kafka cluster). The producer and consumer are the connector's
+  links (`kafka.producer()` / `kafka.consumer()`), owned and run by notify
+  itself (§8) — not by `@rniverse/shared`'s registry any more.
 - **Email provider:** `resend`, wrapped behind an internal interface (not
   called directly from service code) so a second provider or a swap later
   touches one file. **Confirmed the only service that still talks to
@@ -55,8 +56,8 @@ services that know about it. No auth/guards for v1 — see §14, §16.
     `error instanceof Error ? error.message : String(error)` helper.
   - The request-logging middleware (path-only, no querystring — a route
     carrying secrets in query params must never land in logs).
-  Every accessor this package exposes (`connections()`, `http()`,
-  `kafka()`) is a getter, not a plain property, matching the `pg()`/`mail()`
+  Every accessor this package exposes (`connections()`, `http()`) is a
+  getter, not a plain property, matching the `pg()`/`mail()`
   convention already used for shared instances everywhere in this codebase.
 - **Validation:** valibot, same as `aham` (Elysia 1.4+ Standard Schema
   support).
@@ -106,19 +107,24 @@ over from `aham`.
 src/
   index.ts                    — app bootstrap via @rniverse/shared/bootstrap
                                  (createApp/listen/boot), starts the Kafka
-                                 consumer (consumers/) before returning
+                                 setup (setup$kafka) with the consumer handlers
   config.ts                   — the ONLY file that reads process.env;
                                  owns the declarative kafka.producers/consumers
   connections/
-    index.ts                  — @rniverse/shared/registry's createRegistry;
-                                 exports connections()/kafka() getters, pg()/mail()
-    postgres.connection.ts    — SQLConnector instance
-    redpanda.connection.ts    — RedpandaConnector instance
+    index.ts                  — @rniverse/shared/registry's createRegistry
+                                 (postgres required, kafka optional + never
+                                 connected by it); exports connections(),
+                                 kafka/producers/consumers, pg()/mail()
+    postgres.connection.ts    — PostgresConnector instance
+    kafka.connection.ts       — KafkaConnector + its producer / consumer links
+    setup/kafka.setup.ts      — setup$kafka: connects Kafka in the background,
+                                 recovers the connector, producer and consumers
+                                 on an interval; runs each consumer (§8)
     email.connection.ts       — Resend client instance (notify only, §2)
   consumers/                  — one file per named Kafka consumer
     notifications.consumer.ts — exports onEachMessage (poison-message guard + dispatch)
-    index.ts                  — { subscribers, start } — wires each pre-subscribed
-                                 consumer (from @connections) to its handler;
+    index.ts                  — { subscribers } — the handler per configured
+                                 consumer, handed to setup$kafka.start();
                                  kept separate from connections/ specifically so
                                  connections/index.ts never has to import a
                                  domain-specific message handler (would be circular
@@ -266,8 +272,8 @@ Two distinct layers, not one function called two ways:
   ```
   Call sites reference `enum$lock.keys.RETRY_CRON`, never a bare number.
 
-  **No new connector work needed for this** — `@rniverse/connectors/sql`'s
-  `SQLConnector.getInstance()` already returns a Drizzle instance whose
+  **No new connector work needed for this** — `@rniverse/connectors/postgres`'s
+  `PostgresConnector.getInstance()` already returns a Drizzle instance whose
   `.transaction(async tx => { ... })` (postgres-js driver) pins the whole
   callback to one held connection, which is what an advisory lock
   requires — run the `pg_try_advisory_xact_lock` raw-SQL check and the
@@ -307,6 +313,33 @@ report about the pipeline's own failures shouldn't loop back through it.
        `failures` audit row with the reason.
    - **Commit the Kafka offset after handling, unconditionally** — this is
      the mechanism from §3, not optional.
+
+**Kafka never blocks boot or sync/status.** The registry lists Kafka as
+`required: false` with a no-op `connect` (it only reports health and closes
+it), so a slow or unreachable broker can't hold up `connections().init()`.
+`connections/setup/kafka.setup.ts` (`setup$kafka`) starts after init and, every
+`KAFKA_RECOVER_EVERY` (default `30s`, plus once immediately), runs one pass:
+`kafka.health()` (which reconnects the connector when down, time-limited,
+with the connectors' circuit breaker), then connects any producer that isn't
+`ready` and starts any consumer that is `idle`/`failed`/`closed`. A consumer
+start is connect → subscribe → run — a reconnected kafkajs consumer has no
+subscription, so this is the owner's job, not the connector's. A start that
+fails midway closes the consumer so the next pass opens a fresh one. Passes
+never overlap. Shutdown stops `setup$kafka` before closing connections, or
+a pass could reopen them.
+
+Step 1's publish uses the producer only when its state is `ready`; any other
+state goes straight to the pending row, never waits on Kafka. `/api/health`
+reports Kafka through the same link (`kafka: not connected yet` until the
+first pass; a `CircuitOpenError` while the breaker is open answers
+instantly).
+
+Smoke-tested against local Docker (connectors' compose): broker down at
+boot — server up immediately, `/api/health` answers, async send falls back
+to a pending row; broker started later — connector, producer and consumer
+recover without a restart and a published message is consumed; broker
+restarted mid-run — consumer crashes, `setup$kafka` restarts it, group rejoins,
+message consumed; SIGINT — clean shutdown.
 
 **Poison-message guard, before any of the above:** a message that isn't
 valid JSON, or is valid JSON that doesn't match the notification shape
@@ -414,6 +447,9 @@ Env vars needed, mirroring `aham`'s "one file (`config.ts`) reads
 `process.env`, everything else takes it as an argument" rule:
 
 - `PORT`, `NODE_ENV` — present.
+- `INSTANCE_NAME` — **required.** The client name every connection reports
+  (Postgres `application_name`, kafkajs `clientId`); `@rniverse/connectors`
+  has no default.
 - `DATABASE_URL` — present (points at a local `notify` DB). `.env.test`
   now exists, same pattern as `aham` (Bun auto-loads `.env.<NODE_ENV>` on
   top of `.env`): `DATABASE_URL` → `notify_test`, `LOG_LEVEL=silent`.
@@ -426,17 +462,20 @@ Env vars needed, mirroring `aham`'s "one file (`config.ts`) reads
 - Kafka broker config — **done.** `KAFKA_BOOTSTRAP_SERVERS`,
   `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`,
   `KAFKA_SASL_PASSWORD`, `KAFKA_CA_CERTIFICATE` are translated into
-  `RedpandaConnectorConfig` shape inside `config.ts` itself (`ssl`/`sasl`
+  `KafkaConnector`'s config shape inside `config.ts` itself (`ssl`/`sasl`
   split from the protocol, mechanism lowercased, the CA cert's file
   contents read rather than its path forwarded) — verified end to end
   against the real Aiven-hosted broker (connect, topic metadata, produce,
-  consume all confirmed working).
+  consume all confirmed working). `KAFKA_BOOTSTRAP_SERVERS` goes through as
+  `brokers` unparsed — `KafkaConnector` splits the comma-separated string.
+  `KAFKA_RECOVER_EVERY` (duration string, default `30s`) — `setup$kafka`'s
+  interval (§8).
 - **Producers/consumers are declared in `config.ts`, not hand-rolled in
-  `connections/index.ts`** — `config.kafka.producers`/`config.kafka
-  .consumers` are the single source of truth, passed straight through to
-  `@rniverse/shared/registry`'s `createRegistry({ kafka: { connector,
-  producers, consumers } })`, which connects/subscribes everything declared
-  there inside one `connections().init()` call:
+  `connections/`** — `config.kafka.producers`/`config.kafka.consumers` are
+  the single source of truth; `connections/kafka.connection.ts` creates one
+  link per entry on the `KafkaConnector` (`kafka.producer({ name })`,
+  `kafka.consumer({ name, groupId })`) and `setup/kafka.setup.ts` connects/runs them
+  (§8):
   ```ts
   // config.ts
   kafka: {
@@ -448,8 +487,8 @@ Env vars needed, mirroring `aham`'s "one file (`config.ts`) reads
   `consumers.notifications`) so call sites get a typo-checked reference —
   `config.kafka.producers.notifier` is a compile error if misspelled, unlike
   a string passed to `.find()`. The `name` field *inside* each entry is the
-  actual runtime registry key (what `kafka().producers.get()` /
-  `kafka().consumers.get()` look up by) — deliberately not the object key
+  link's name on the `KafkaConnector` (unique per connector, shown in log
+  lines as `kafka/<name>`) — deliberately not the object key
   the entry is declared under, so the runtime/log label can differ per
   deployment (env-driven, `KAFKA_NOTIFICATIONS_PRODUCER_NAME` /
   `KAFKA_NOTIFICATIONS_CONSUMER_NAME`, each defaulting to its own object key)
@@ -482,8 +521,8 @@ Env vars needed, mirroring `aham`'s "one file (`config.ts`) reads
 - `AUTH_SERVICE_URL` — dropped from `.env`/`.env.example` (was leftover
   from copying `aham`'s file, vestigial per §14).
 
-`connections/email.connection.ts` and `connections/redpanda.connection.ts`
-both follow `aham`'s one-line-per-connector pattern — `config.ts` now
+`connections/email.connection.ts`, `connections/postgres.connection.ts` and
+`connections/kafka.connection.ts` all follow `aham`'s one-line-per-connector pattern — `config.ts` now
 exists and both compile against it.
 
 Plus the DB-backed `config` table (§5) for values that should be editable
@@ -565,9 +604,10 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
   .consumers` (§15).
 - `db/schema.ts` + migration — `expires_at` (renamed from `send_before`,
   §5), `config`'s unique index, `failures`' plain index, all as specified.
-- `connections/{postgres,email,redpanda,index}.ts` — `index.ts` rebuilt on
-  `@rniverse/shared/registry`'s `createRegistry`; `redpanda` stays
-  `required: false` in health (sync/status keep working if Kafka is down).
+- `connections/{postgres,email,kafka,index}.ts` — `index.ts` rebuilt on
+  `@rniverse/shared/registry`'s `createRegistry`; `kafka` stays
+  `required: false` in health (sync/status keep working if Kafka is down)
+  and is connected by `setup$kafka`, not the registry (§8).
 - `services/email.service.ts` — unchanged, still the only direct Resend
   call in this codebase.
 - `services/notification/{dispatch,orchestrator,publish,index}.ts` — split
@@ -579,7 +619,8 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
   poison-message-safe handler (`GROUP_JOIN` logged so "hadn't joined yet"
   is visible instead of guessed, `reject()` records a malformed message
   into `failed_notifications`/`failures` instead of crash-looping the
-  consumer) plus the barrel that wires it to its pre-subscribed consumer.
+  consumer) plus the barrel mapping each configured consumer to its handler
+  (`setup$kafka` runs them, §8).
 - `schema/types.ts` — moved out of `services/notification/` (§4).
 - `schema/api/notification.schema.ts` — unchanged, includes the Kafka
   wire-format schema used by the poison-message guard.
@@ -597,9 +638,10 @@ crash-looping the consumer, a deliberate sync-failure correctly producing
   byte-identical to `aham`'s.
 - `drizzle.config.ts` — unchanged.
 - **Removed, now `@rniverse/shared`'s:** `middlewares/log.middleware.ts`,
-  the `connection-status.enum.ts` state machine, the standalone Kafka
-  producer/consumer factory functions (folded into `createRegistry`
-  itself), the `registerShutdown`/`listen` boot boilerplate.
+  the `connection-status.enum.ts` state machine, the
+  `registerShutdown`/`listen` boot boilerplate. (The standalone Kafka
+  producer/consumer factories went into `createRegistry` first, then out
+  again: they're `KafkaConnector` links now, run by `setup$kafka`, §8.)
 
 **Not built yet:** the retry and metrics crons (§11, §12) — still next, not
 blocked on anything (they don't need Kafka at all, per §7/§11/§12).
