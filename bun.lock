@@ -135,7 +135,7 @@
 
     "@protobufjs/utf8": ["@protobufjs/utf8@1.1.2", "", {}, "sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug=="],
 
-    "@rniverse/connectors": ["@rniverse/connectors@github:rniverse/connectors#1b1feb1", { "peerDependencies": { "@rniverse/utils": "github:rniverse/utils#dist", "@valkey/valkey-glide": "^2.5.2", "drizzle-orm": "^0.45.2", "kafkajs": "^2.2.4", "mongodb": "^7.6.0", "postgres": "^3.4.9", "typescript": "^7.0.2" } }, "rniverse-connectors-1b1feb1", "sha512-/czr/eNSpezbNBTeZoDrW+Gvyic/NSvJ9kV0GqWSu6qnc0wO6bR2hhY5vwWP+XzpWmasggX6LW7zn3P5m1LyMw=="],
+    "@rniverse/connectors": ["@rniverse/connectors@github:rniverse/connectors#15b1312", { "peerDependencies": { "@rniverse/utils": "github:rniverse/utils#dist", "@valkey/valkey-glide": "^2.5.2", "drizzle-orm": "^0.45.2", "kafkajs": "^2.2.4", "mongodb": "^7.6.0", "postgres": "^3.4.9", "typescript": "^7.0.2" } }, "rniverse-connectors-15b1312", "sha512-2gUSy80MJ2UhEC68aH37fQLEK1Tkxgd8BLGzOYN6VemjT33S/wnW56alYNCiaTIQ1fgbV0m1/am9EYkUY3aKKQ=="],
 
     "@rniverse/shared": ["@rniverse/shared@github:rniverse/shared#5431efa", { "peerDependencies": { "@elysiajs/openapi": "^1.4.16", "@rniverse/utils": "github:rniverse/utils#dist", "@valibot/to-json-schema": "^1.7.1", "elysia": "^1.4.30", "typescript": "^7.0.2" } }, "rniverse-shared-5431efa", "sha512-vGob8WKT+O3AqLZTZm6BQ8AMTxPwMUntidcLX+FE7wKWUTeRZHjBZYaAfilpajYcgNW2Y7QJXhIqd+7Igjpt/w=="],
 
