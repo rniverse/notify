@@ -47,7 +47,7 @@ export const notificationAPI = new Elysia({ prefix: '/notification' })
 		// table) is the common case, so this avoids a wasted second query on
 		// the happy path (spec §13 leaves the choice open).
 		const [current] = await client
-			.select()
+			.select({ id: notifications.id, status: notifications.status, updated_at: notifications.updated_at })
 			.from(notifications)
 			.where(eq(notifications.id, params.id))
 			.limit(1);
