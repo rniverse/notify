@@ -567,18 +567,48 @@ happened once this build, caught by comparing `bun.lock` entries).
 
 ## 17. Tests
 
-Not yet written. Intended shape, mirroring `aham`: integration tests
-exercised via `app.handle(new Request(...))`, `import.meta.main` guarding
-server startup so tests can import without binding a port, `bun run test`
-(not bare `bun test`) so any `pretest` DB setup fires.
+**Built.** Same shape as `aham`: integration tests through
+`app.handle(new Request(...))` (no port bound), `import.meta.main` guarding
+server startup, one app + connections per run (`tests/utils.ts` `getApp()`),
+the DB truncated before each test (`tests/setup.ts`, preloaded by
+`bunfig.toml`). Run with `bun run test`, not bare `bun test` — `pretest`
+regenerates migrations and resets the test DB.
 
-**Known gap:** `package.json`'s `pretest`/`test` scripts were copied from
-`aham` along with `generate-keys`/`db:test:setup` references, but
-`src/scripts/generate-keys.ts` and `src/scripts/setup-test-db.ts` were
-never created here — only `check-kafka.ts` exists under `src/scripts/`.
-Running `bun run test` today fails on the missing script, not on a failing
-assertion. Needs either those scripts written for real once tests exist, or
-the dead references removed until then.
+```
+tests/app.test.ts                            — error envelope, x-request-id
+tests/api/health.test.ts                     — /api/health with Postgres + Kafka up
+tests/api/notification.sync.test.ts          — sent → 200; provider failure → 502 + failed row; 422s
+tests/api/notification.async.test.ts         — publish → consume → sent; Kafka down → pending
+                                               row at once; failed publish → pending row
+tests/api/status.test.ts                     — 404 / from notifications / from failed_notifications
+tests/services/orchestrator.test.ts          — already-sent skip, attempts, expiry, existing terms win
+tests/consumers/notifications.consumer.test.ts — poison-message guard, called directly
+```
+
+**Infra — local, no live creds except Resend:**
+- Postgres: the local server in `.env.test`'s `DATABASE_URL`
+  (`notify_test`). `src/scripts/setup-test-db.ts` (`bun run db:test:setup`,
+  run by `pretest` with `NODE_ENV=test`) creates it if missing, drops and
+  re-migrates the schema — and refuses any database whose name doesn't end
+  in `_test`.
+- Kafka: `docker-compose.yml` — `apache/kafka:4.3.1`, KRaft, plain, host port
+  `59094` (`bun run docker:up` / `docker:down`). `.env.test` points
+  `KAFKA_BOOTSTRAP_SERVERS` there with `KAFKA_SECURITY_PROTOCOL=PLAINTEXT`,
+  topic and group `notify-test`. Async tests wait for the consumer group to be
+  `Stable` before publishing (a new group starts at the latest offset).
+- Resend: the **real API** with the key from `.env`, sending only to
+  Resend's test inboxes (`delivered+<label>@resend.dev` — resend.com/docs/
+  dashboard/emails/send-test-emails); these count against the account quota.
+  The provider-failure path is real too: a `from` on an unverified domain
+  (`example.com`) gets Resend's 403 — the Resend SDK prints that error to the
+  console, expected output. Sends are spaced ~600 ms apart (Resend allows
+  ~2 req/s; a 429 would read as a provider failure) by a pass-through spy on
+  `service$email.send`, which also counts calls.
+
+29 tests. Each rule below was checked by breaking it on purpose and seeing a
+test fail: publish ignoring the producer state, expiry ignored, the
+already-sent skip removed, a later call's attempt terms winning, the
+empty-message guard.
 
 ## 18. Open decisions
 
