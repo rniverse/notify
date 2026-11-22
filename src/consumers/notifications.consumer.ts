@@ -1,10 +1,10 @@
 import { pg } from '@connections';
 import { failed_notifications, failures } from '@db/schema';
+import type { EachMessagePayload } from '@rniverse/connectors/kafka';
 import { reasonOf } from '@rniverse/shared/error';
 import { log, t, ulid } from '@rniverse/utils';
 import { schema$notification } from '@schema/api/notification.schema';
 import { send } from '@services/notification/orchestrator';
-import type { EachMessagePayload } from 'kafkajs';
 
 /**
  * A message that never made it into `notifications` — invalid JSON, or valid

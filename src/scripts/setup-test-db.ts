@@ -5,9 +5,9 @@
 // Run with NODE_ENV=test so Bun loads .env.test's DATABASE_URL (a dev script,
 // not app code — it reads the env directly).
 
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
+import { drizzle } from '@rniverse/connectors/postgres';
+import { migrate } from '@rniverse/connectors/postgres';
+import { postgres } from '@rniverse/connectors/postgres';
 
 const url = process.env.DATABASE_URL;
 if (process.env.NODE_ENV !== 'test' || !url) {

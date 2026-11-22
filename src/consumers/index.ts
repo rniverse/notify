@@ -1,8 +1,8 @@
 import { config } from '@config';
 import { kafka } from '@connections';
+import type { EachMessagePayload } from '@rniverse/connectors/kafka';
 import { log } from '@rniverse/utils';
 import { retry } from '@rniverse/utils/resilience';
-import type { EachMessagePayload } from 'kafkajs';
 import { onEachMessage as notifications } from './notifications.consumer';
 
 type ConsumerKey = keyof typeof config.kafka.consumers;

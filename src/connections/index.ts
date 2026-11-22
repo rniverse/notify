@@ -1,9 +1,11 @@
+import { config } from '@config';
 import { createRegistry } from '@rniverse/shared/registry';
 import { email } from './email.connection';
 import { kafka } from './kafka.connection';
 import { postgres } from './postgres.connection';
 
 const registry = createRegistry({
+	name: config.appName,
 	connections: [
 		{ name: 'postgres', connector: postgres, required: true },
 		// Kafka is `required: false` — only the async send route and the
@@ -15,6 +17,7 @@ const registry = createRegistry({
 });
 
 export const connections = registry.connections;
+export const health = registry.health;
 
 export { kafka } from './kafka.connection';
 

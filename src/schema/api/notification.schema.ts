@@ -1,5 +1,4 @@
 import { t } from '@rniverse/utils';
-import type { InferOutput } from 'valibot';
 
 const emailPayload = t.object({
 	to: t.array(t.pipe(t.string(), t.email())),
@@ -27,9 +26,9 @@ const notificationMessage = t.variant('channel', [
 	}),
 ]);
 
-export type EmailPayload = InferOutput<typeof emailPayload>;
-export type NotificationInput = InferOutput<typeof notification>;
-export type NotificationMessage = InferOutput<typeof notificationMessage>;
+export type EmailPayload = t.InferOutput<typeof emailPayload>;
+export type NotificationInput = t.InferOutput<typeof notification>;
+export type NotificationMessage = t.InferOutput<typeof notificationMessage>;
 
 export const schema$notification = {
 	send: notification,

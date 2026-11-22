@@ -1,9 +1,9 @@
 import { pg } from '@connections';
 import { failed_notifications, failures, notifications } from '@db/schema';
+import { eq } from '@rniverse/connectors/drizzle';
 import { reasonOf } from '@rniverse/shared/error';
 import { log, ulid } from '@rniverse/utils';
 import type { NotificationInput, SendOpts, SendOutcome } from '@schema/types';
-import { eq } from 'drizzle-orm';
 import { dispatch } from './dispatch';
 
 function isExpired(expiresAt: Date | null): boolean {

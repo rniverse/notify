@@ -6,7 +6,7 @@ import {
 	text,
 	timestamp,
 	uniqueIndex,
-} from 'drizzle-orm/pg-core';
+} from '@rniverse/connectors/drizzle/pg-core';
 
 // Shared shape between `notifications` and `failed_notifications` (spec §5)
 // — the latter is a terminal copy, not a status value on the former.

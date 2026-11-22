@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { onEachMessage } from '@consumers/notifications.consumer';
+import type { EachMessagePayload } from '@rniverse/connectors/kafka';
 import { ulid } from '@rniverse/utils';
-import type { EachMessagePayload } from 'kafkajs';
 import { email, getApp, resend, rows } from '../utils';
 
 /** A kafkajs message as the consumer receives it — called directly, no broker. */

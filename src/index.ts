@@ -3,7 +3,7 @@ import { config } from '@config';
 import { connections } from '@connections';
 import { consumers } from '@consumers';
 import { BOOTSTRAP_ERRORS } from '@enums/errors.enum';
-import { boot, createApp, listen } from '@rniverse/shared/bootstrap';
+import { boot, createApp, listen } from '@rniverse/shared/elysia';
 
 export const init = async () => {
 	// Before init() so the consumer's `connect` listener is there when it

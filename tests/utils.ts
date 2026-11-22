@@ -3,9 +3,9 @@ import { init } from '@app';
 import { config } from '@config';
 import { kafka, pg } from '@connections';
 import { failed_notifications, failures, notifications } from '@db/schema';
+import { eq, sql } from '@rniverse/connectors/drizzle';
 import { sleep } from '@rniverse/utils/generic';
 import { service$email } from '@services';
-import { eq, sql } from 'drizzle-orm';
 
 export type App = Awaited<ReturnType<typeof init>>;
 

@@ -1,12 +1,12 @@
 import { pg } from '@connections';
 import { failed_notifications, notifications } from '@db/schema';
 import { enum$error } from '@enums/errors.enum';
+import { eq } from '@rniverse/connectors/drizzle';
+import { Elysia } from '@rniverse/shared/elysia';
 import { ulid } from '@rniverse/utils';
 import { schema$notification } from '@schema/api/notification.schema';
 import { AppError, service$notification } from '@services';
 import { ok } from '@utils';
-import { eq } from 'drizzle-orm';
-import Elysia from 'elysia';
 
 export const notificationAPI = new Elysia({ prefix: '/notification' })
 	.post(
